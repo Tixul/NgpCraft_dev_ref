@@ -2,8 +2,8 @@ site_name: NGPC Dev Wiki
 site_description: >-
   Developer reference for programming the Neo Geo Pocket Color (NGPC)
   and its Toshiba TLCS-900/H CPU.
-# Set this to your published URL once GitHub Pages is enabled, e.g.
-# site_url: https://<user>.github.io/NgpCraft_dev_ref/
+# Published site URL (enables canonical links + sitemap.xml)
+site_url: https://tixul.github.io/NgpCraft_dev_ref/
 docs_dir: docs
 site_dir: site
 
