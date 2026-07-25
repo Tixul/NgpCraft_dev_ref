@@ -92,6 +92,7 @@ nav:
   - Systems:
       - Game Loop: 05_Systems/Game-Loop.md
       - Input: 05_Systems/Input.md
+      - Link Cable: 05_Systems/Link-Cable.md
       - Storage and Saves: 05_Systems/Storage-and-Saves.md
       - Collision: 05_Systems/Collision.md
       - Fixed-Point Math: 05_Systems/Fixed-Point-Math.md
