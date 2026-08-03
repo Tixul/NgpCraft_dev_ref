@@ -98,6 +98,7 @@ nav:
       - Fixed-Point Math: 05_Systems/Fixed-Point-Math.md
       - Localization: 05_Systems/Localization.md
       - Debug Tools: 05_Systems/Debug-Tools.md
+      - Measuring Performance: 05_Systems/Measuring-Performance.md
   - Pipeline & Patterns:
       - Asset Pipeline: 06_Pipeline-and-Patterns/Asset-Pipeline.md
       - Gameplay Patterns: 06_Pipeline-and-Patterns/Gameplay-Patterns.md
