@@ -409,6 +409,57 @@ def link_order_key(path):
 **General rule:** keep metasprites in bank `0x20`. If the project grows and sprites risk
 overflowing, migrate to far pointers in `MsprAnimFrame.frame` and `ngpc_mspr_draw()`.
 
+### 8.2b Section order at the entry point — the ROM executes whatever lands at 0x200040
+
+The cartridge entry point is **`0x200040`**, and the CPU starts there unconditionally. It
+does not look for a symbol: it executes the first byte the linker happened to place at that
+address. Put a const table first and the CPU runs your font as instructions — an immediate,
+total crash with no diagnostic.
+
+```
+sections
+{
+    far_area    org=0x004000                             : {*(f_area)}
+    far_code    org=0x200040                             : {*(f_code)}   /* CODE FIRST */
+    far_const   org=org(far_code)+sizeof(far_code)       : {*(f_const)}
+    far_data    org=org(far_const)+sizeof(far_const)
+                addr=org(far_area)+sizeof(far_area)      : {*(f_data)}
+}
+```
+
+Two rules, and both are needed:
+
+1. **`f_code` before `f_const` in the linker script.** A ROM with no `const` data at all
+   works either way, which is exactly how this ships broken: it starts failing the day
+   someone adds a lookup table.
+2. **The function you want at the entry must be the first function of the first object
+   you pass the linker.** Object order on the command line decides it, and so does source
+   order inside the file — helpers go after, forward-declared.
+
+**Verify it, do not assume it:** the `.map` must show your entry symbol at `00200040`.
+
+```
+      _main          200040 f_code
+```
+
+### 8.2c The linker prints its errors and still returns success
+
+`tulink` reports an unresolved symbol as `TULINK-Error-209` **on stdout** and does not
+necessarily fail the build. A shell script that only checks exit codes carries on: the
+converter then runs on the **previous** `.abs`, and out comes a `.ngc` that looks fine, is
+correctly sized, and is not the code you just wrote.
+
+Gate on the output, not on the status:
+
+```bash
+python tools/build_utils.py link main.abs ngpc.lcf $OBJS 2>&1 | tee build.log
+grep -qi "error" build.log && { grep -i error build.log; exit 1; }
+```
+
+⚠️ Grepping for `Error` is a **floor, not a ceiling** — it catches this class and says
+nothing about a ROM that links cleanly and does not run. Whatever the build says, the
+ROM still has to be run.
+
 ### 8.3 RAM: Oversized Entity Pools
 
 **Context:** template runtimes allocate fixed-size arrays on `main()`'s stack for entities
@@ -531,6 +582,75 @@ The **NgpCraft toolchain** is a clean-room, Python-only replacement for Toshiba'
 proprietary tools (`cc900`, `asm900`, `tulink`, `tuconv`, `s242ngp`). Its components are
 `t900cc` (C compiler), `t900as` (assembler), `t900ld` (linker), and `ngpc_romtool` (ROM
 packager). It can compile a full non-trivial game.
+
+> **Two lines, and where they stand (certified 2026-09-09).** The hardware-validated **v1**
+> described in this section (`tools/t900cc.py`) is a **frozen baseline**. Active development
+> is a clean-room **v2** that rewrites the code generator to emit asm **byte-identical** to
+> the proprietary compiler, building on the decoded pipeline and TAC IR documented in §10.
+>
+> | stage | state |
+> |---|---|
+> | frontend | **73/73** byte-exact against the official one |
+> | backend | 170/420 byte-exact — ⚠️ **no longer tracked as progress**, see below |
+> | assembler | ISA **780/780** encodings |
+> | object reader | Toshiba `.rel` / `.lib` (IEEE-695) — **107/107** |
+> | linker | reproduces a released homebrew's official ROM **byte for byte** |
+> | porting | **132/132 files, 7 projects at 100 %** |
+> | tests | **1 204** passing, 59 xfail, 0 failures |
+>
+> ⚠️ **Byte-exactness stopped being the metric on purpose.** Chasing it indefinitely was
+> abandoned in favour of a harder question: does the ROM *run*, judged by executing it on a
+> **second, independent emulator core**. Byte-identity remains a diagnostic — it names the
+> cause — but it is no longer what "progress" means.
+
+
+### 9.0b Writing your own tools for this CPU — five things that cost us ROMs
+
+Independent of our toolchain; they apply to anyone building an assembler, a linker or a
+code generator for the TLCS-900/H.
+
+**1. ⚠️ The Toshiba fascicle you will find is the 900/L1 volume, not the 900/H.** Its
+table 1 groups both parts in the same column *for the instruction set*, which is identical
+— that part is safe to use. **The `states` (cycle) column is not transposable.** An
+external contribution to this project was once accepted on the assumption that
+"900/H ≡ 900/L1" for cycles, and it was wrong. Never build a timing model on it; time the
+hardware instead.
+
+**2. An assembler that ACCEPTS your text is not an assembler that emits the right bytes.**
+Instruction tables obtained by reverse-engineering the official assembler describe what it
+*does* — never the universe of what is *legal*. So an encoding you never emit is not
+flagged red by your audit: it is **absent from the audit's universe entirely**. Audit
+against the documented instruction table, not against your own output. Ours went from an
+unknown coverage to **780/780** the day it was audited against the document, and that pass
+found **16 wrong encodings and 33 wrong mnemonics** that every existing gate had been
+silent about.
+
+**3. Branch relaxation is a separate stage, and it needs its own bench.** The short/long
+form of a local jump is not chosen by the encoder — it is a fixed point over a *sequence*
+of jumps that influence one another. Per-instruction gates cannot see it by construction.
+This has already killed a ROM here: in the first-generation assembler, every **backward**
+jump spanning relaxed branches came out **one byte short per shortened branch**, which
+turned a timer routine into an infinite loop. Bench it explicitly: both thresholds
+(`+127`/`+128` and `-127`/`-128`), every condition code in both forms, and a backward jump
+that spans branches which themselves relax.
+
+**4. ⛔ A gate that runs both ROMs on the SAME emulator cannot see what that emulator does
+not do.** A ROM of ours passed a pixel-difference gate with **zero pixels of deviation** at
+three checkpoints while being, in fact, dead: from frame 13 it executed address `0x000000`
+and spent **71 % of its cycles** there, because the epilogue of an `__interrupt` handler
+did not release the frame its prologue had allocated, so `reti` resumed from an address
+taken *inside* the frame. The fault cancelled out on both sides because the emulator did
+not deliver the interrupt that exposed it. Verified rather than assumed: deliberately
+re-breaking an otherwise correct ROM the same way leaves the gate silent.
+
+🔑 **Differential testing against yourself is blind to anything you and your reference
+share.** Add a gate that asks a different question — "does the program counter ever leave
+ROM, RAM and BIOS?" is cheap and catches this whole family — and run it on a core you did
+not write.
+
+**5. Measure per STAGE, not per function.** A stage that has never been measured contains
+wrong code, and "it compiles" proves nothing about any of them. See also §8.2c: a link
+error can print and still return success.
 
 ### 9.1 Pipeline
 

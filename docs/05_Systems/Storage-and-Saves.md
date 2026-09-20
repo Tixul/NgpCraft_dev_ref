@@ -373,11 +373,57 @@ cartridge. A save-comparison test passed; only a run-on test (does the game reac
 screen?) caught it. A VBlank counter that stops incrementing is the tell.
 
 > **Why `swi 1` masking interrupts is not a side effect but the point:** the erase takes
-> ~1 s and the game's own ISR lives in the same cartridge. If an interrupt could fire, the
+> ~57 ms (§5.0c) and the game's own ISR lives in the same cartridge. If an interrupt could fire, the
 > CPU would try to fetch instructions from a chip that is in erase mode. Reset the
 > watchdog before each call.
 
 *Contributed by [Napsterix](https://github.com/Napsterix).*
+
+### 5.0c How long the chip is busy — measured, not assumed
+
+A program or an erase takes **real time**, and for its whole duration the chip **answers
+status instead of contents** to every read of the cart window — an instruction fetch
+included. That window is the reason the stub is copied to RAM and run with interrupts
+masked. Everything in §5.0b follows from it.
+
+Measured on a 16 Mbit cartridge (`hw_test_flash_timing`): the shipped AMD stubs already
+count their own status-poll turns in `XIY` and still hold that count on return, and the
+same loop is timed against `RAS.V`, the scanline counter, which is indifferent to the
+interrupt mask.
+
+| operation | time |
+|---|---|
+| erase, 8 KB block | **57.5 ms** — four measurements, spread 53.0 to 62.5 |
+| program, one byte | **33 µs** |
+| erase, 64 KB block | **441 ms** — 7.67x the 8 KB one, so scaling is close to linear |
+
+⚠️ **The erase is not a constant.** 18 % between measurements, twice inside a single run.
+Design against the spread, never against the mean.
+
+⚠️ **The margin under the watchdog is a factor of two, not an order of magnitude.** The
+~100 ms watchdog is why the 8 KB block is the one to use — but 57.5 ms fits with far less
+room than the "5–15 ms" that older notes claimed. A 64 KB block does not fit at all, which
+is what took the console down in the first hardware trials.
+
+⛔ **A program that CANNOT succeed never reports failure.** Asking a NOR cell to go back up
+— a slot reprogrammed without an erase first — draws **no DQ5**: verified with eight times
+a driver's normal timeout, about **18 seconds** of polling, and the chip says nothing. The
+AMD datasheets describe a DQ5 timeout; this part does not do it. Three consequences:
+
+- **your poll loop's own iteration ceiling is the only way out. It must have one.**
+- those seconds pass with interrupts masked — that is a dead console, not a failed save.
+- the corruption is silent: the cell ends up holding `old AND new`.
+
+⛔ **The reset command (`F0`) only reaches a chip that has stopped.** It brings back one
+stuck on an impossible program; sent to a chip in the middle of a real erase it is
+**ignored**, the chip stays busy, and the next instruction fetch reads status bits. Wait
+the operation out, *then* reset.
+
+> **For emulator authors.** A flash model that commits the byte inside the bus cycle
+> carrying the command has no busy window at all, so a driver's status poll exits on its
+> first turn and none of the above can happen. Every save bug in this section then looks
+> like a working save. The single unambiguous signature to instrument is **an instruction
+> fetched from a chip that is programming or erasing**.
 
 ### 5.1 Confirmed BIOS Parameters
 
@@ -509,6 +555,8 @@ a guard `(void)data`, to ensure the stack prologue stays predictable for the `xs
 | "No crash" = success | False | Validate with full power-cycle test |
 | `(0x6E)` not set to `0x14` | Write cycles silently ignored by hardware | Set `(0x6E)=0x14` before stub, `(0x6F)=0xB1`; restore after |
 | Executing stub from flash | Undefined behavior (chip busy during program) | Copy stub to RAM at `0x6E00`, execute from there |
+| Polling a program with no iteration ceiling | **Hangs forever** — an impossible write never raises DQ5 (§5.0c) | Bound the poll loop yourself; DQ5 is not enough |
+| Sending `F0` to a chip mid-erase | Ignored; the chip stays busy and the next fetch reads status | Wait the operation out, then reset |
 | `CLR_FLASH_RAM` second call | Silently fails (BIOS internal bug) — legacy path only | Erase only when block full; standalone stubs are not affected |
 | Saving while a raster/Timer0 ISR is active | The split ISR writes `(0x6E)`/`(0x6F)` — the same control bytes the flash stub drives -> corruption | Disable the split timer (e.g. `hud_raster_disable()`) **before** `ngpc_flash_save()`, or save only from a state where raster is already off |
 | Checksum field placed last (after terminal padding) | cc900 may pad the whole struct -> the checksum's flash offset is no longer `SAVE_SIZE-1` -> validation drifts | Put `checksum` at a fixed offset **before** the terminal `_pad[]` (see §4.1) |

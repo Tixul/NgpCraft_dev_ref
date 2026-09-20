@@ -185,7 +185,8 @@ u8 fire_cooldown(void) { return FIRE_RATE_BY_LEVEL[g_level]; }
 
 ### 3.4 Fixed vs self-timed frame rate (60 vs 30 fps)
 
-Not every game runs at a fixed 60 fps. Some (Cool Boarders Pocket, Densha de Go)
+Not every game runs at a fixed 60 fps. Some shipped titles — a snowboarding game and a
+rail-vehicle simulation among them —
 **self-time**: the VBlank ISR does the full per-frame work only if the main loop
 already consumed the previous frame (a per-frame `vsync` byte, e.g. `0x4016`). If the
 per-frame work exceeds one VBlank period, the ISR skips every other VBlank and the game

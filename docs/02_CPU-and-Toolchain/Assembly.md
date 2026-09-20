@@ -93,6 +93,44 @@ dec     1, b            ; decrement B by 1
 On TLCS-900H, INC/DEC are encoded `INC n, r` with n = 1..8.
 asm900 MAXIMUM mode rejects the short form without the count.
 
+### 3.1b INC/DEC on a 16- or 32-bit register does NOT set the flags
+
+```asm
+; WRONG — this does not test BC:
+        ld      bc, 0
+loop:   dec     1, bc
+        jr      z, give_up          ; <- reads the flag from the LAST REAL COMPARE
+        ldb     a, (0x008009)
+        cp      a, 190
+        jr      c, loop
+
+; CORRECT — compare explicitly, the way the SNK flash stubs do:
+        ld      xiy, 0
+loop:   incl    1, xiy
+        cpl     xiy, 0x00010000
+        jr      z, give_up
+        ...
+```
+
+Only the **8-bit** form of `INC`/`DEC #n,r` updates the flags. The word and long forms
+leave them exactly as the previous flag-setting instruction left them, so a `jr z` written
+after one silently tests something else entirely.
+
+**It does not crash — it lies.** Measured cost of writing it the wrong way, twice in the
+same ROM:
+
+- a loop bounded this way escaped on the one frame where `RAS.V` happened to equal the
+  value in the `cp` above it, and the measurement it guarded came out as a wrapped negative
+  number. It was then blamed on the emulator — wrongly, and published as such before the
+  real cause was found.
+- the same pattern in a flash poll loop took the branch on its **first** iteration,
+  because the `cp XIY,#limit` that had just ended the previous loop left Z set. That sent a
+  chip-reset command to a flash chip in the middle of an erase, which the chip ignores, and
+  **the console died** (see STORAGE §5.0c).
+
+🔑 The SNK stubs always follow `inc 1,XIY` with an explicit `cp XIY,#limit`. That is not
+style — it is the only thing that works.
+
 ### 3.2 No LD (HL), Immediate
 
 ```asm

@@ -113,6 +113,58 @@ static void raster_apply_polled(const u8 *table_x)
 
 ---
 
+### 1.4b Hills on a pseudo-3D road — what a shipping NGPC racer actually does
+
+Reverse-engineered from a commercial NGPC racer's road engine and re-measured on our own,
+because the obvious model is wrong in a way that costs a rewrite.
+
+**A gradient is a RATIO, not an exponential.** The engine walks the road from the bumper
+line upward as a staircase of two-row slices, and gives each slice **0, 1 or 2 screen
+lines** by adding a per-gradient *rate* twice into an 8-bit accumulator and counting the
+carries. The rate table is not a curve — with `k = 1 + |g| / 20`:
+
+```
+climbing   rate = 128 * k          a slice takes k times more LINES
+descending rate = 128 / k          a line swallows k times more ROWS
+```
+
+Fitted to **1 unit over 41 table entries**; an exponential fit was off by 11. So a hill is
+a ×0.5 to ×2 ratio on how fast the road recedes, which is why it reads as slope without any
+trigonometry.
+
+**The per-scanline table is wider than a scroll value.** Eight bytes per line: `SCY`, `SCX`
+and **three 15-bit colours**. The tarmac that streams past is a background palette entry
+rewritten every line — the world image itself never changes (verified: zero bytes touched
+over 600 frames).
+
+⛔ **Quantising a gradient needs a dead band.** Deriving the gradient step by a plain
+divide (`accumulator / 16`) flickers: the accumulator advances in steps of about eight, so
+it crosses a multiple of sixteen one way then back with no real change in the terrain. And
+one gradient step is worth about **three lines of horizon**, so the flicker is visible.
+Fix: a **half-step dead band** before the step is allowed to change.
+
+⚠️ **Repeating a row that is not uniform makes a hard-edged band.** If the top row of your
+sky board is not a flat colour, a descent that repeats it reads as a stripe across the top
+of the screen — which forces you to clamp descents to a fraction of the climb and kills
+half your relief. Make that row uniform before tuning any slope numbers.
+
+### 1.4c Debugging a raster effect: measure the TABLE, not the image
+
+Three method rules, each paid for on this effect:
+
+1. **Read the register table the transfer pushes, not the picture it produces.** An
+   emulator that logs the display registers per scanline gives an exact answer: the horizon
+   is the first line whose plane-2 vertical offset is no longer zero. No colours, no
+   sprites, no thresholds, nothing to tune. Every attempt to detect it *in the image* was
+   an argument about thresholds.
+2. **One symptom can have several independent causes.** This one had **five**. "Found a
+   cause" is not "symptom gone" — it was declared fixed four times before it was true. The
+   only honest verdict is the symptom measured again, from scratch, after each fix.
+3. **A correct fix can be invisible on the bench.** The dead band above changed *nothing*
+   on an automated probe — 90 movements, 6 round trips, identical before and after —
+   because the range the probe could reach did not contain the case. A flat bench result
+   does not mean the fix is wrong; check what the bench actually covers.
+
 ## 2. Palette Effects — ngpc_palfx
 
 ### 2.1 API

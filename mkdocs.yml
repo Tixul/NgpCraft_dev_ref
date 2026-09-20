@@ -85,6 +85,7 @@ nav:
       - Tilemaps and Scrolling: 03_Graphics/Tilemaps-and-Scrolling.md
       - Colors and Palettes: 03_Graphics/Colors-and-Palettes.md
       - Effects and Raster: 03_Graphics/Effects-and-Raster.md
+      - Pseudo-3D Road: 03_Graphics/Pseudo-3D-Road.md
       - DMA: 03_Graphics/DMA.md
       - VRAM Queue: 03_Graphics/VRAM-Queue.md
   - Audio:
