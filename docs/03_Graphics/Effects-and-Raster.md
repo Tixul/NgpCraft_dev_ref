@@ -113,9 +113,10 @@ static void raster_apply_polled(const u8 *table_x)
 
 ---
 
-### 1.4b Hills on a pseudo-3D road — what a shipping NGPC racer actually does
+### 1.4b Hills on a pseudo-3D road — what a shipping racer actually does
 
-Reverse-engineered from a commercial NGPC racer's road engine and re-measured on our own,
+Reverse-engineered from a commercial racer's road engine (a cartridge for another colour
+handheld — the mechanism transfers unchanged) and re-measured on our own,
 because the obvious model is wrong in a way that costs a rewrite.
 
 **A gradient is a RATIO, not an exponential.** The engine walks the road from the bumper
@@ -278,7 +279,8 @@ void ngpc_text_tile_screen(plane, pal, map);                 /* fill 20x19 from 
 
 - Requires `ngpc_load_sysfont()` to have been called first.
 - Printable ASCII maps to tile indices `0x20-0x7F` (tiles 32-127).
-- Tile slots 32-127 are reserved for the system font. Load custom tiles at 128+.
+- `BIOS_SYSFONTSET` writes tile slots **0..255** (ASCII at `0x20-0x7F`,
+  half-width katakana at `0xA1-0xDF`). Load custom tiles at 128+ AFTER the font call.
 - Use tilemap-based text via `ngpc_text_print` rather than bitmap mode when possible —
   it uses far fewer tiles and allows mixing text with sprite/tilemap gameplay.
 
@@ -676,6 +678,11 @@ forward-view rail/racing game:
 - **Sprite depth scaling** (§8.4) — swaps pre-baked metasprites by distance for the relief
   (signs, buildings, rival vehicles). See [Gameplay-Patterns §5.5b](../06_Pipeline-and-Patterns/Gameplay-Patterns.md).
 
+> **Building a complete racer on this effect?** [Pseudo-3D Road](Pseudo-3D-Road.md) §7–§14:
+> corners that arrive instead of switching on, the full hill recipe, the five independent
+> causes of "the top of the road flickers" (a single-buffered per-line table first among
+> them), objects on the road and the CPU budget.
+
 ### 8.1 Per-line scroll handler (HBlank ISR)
 
 The road is a flat tilemap; the perspective comes from giving **each scanline a different
@@ -988,7 +995,7 @@ profile → double-buffer → depth→zoom relief sprites → optional per-band 
 | DMA + VBlank | Forbidden | Powers off watchdog |
 | Timer0 owner | Exclusive | Raster OR DMA raster OR raster chain |
 | ngpc_bitmap tiles | 380/512 | Remaining: 132 for text/sprites |
-| Sysfont tile range | `0x20-0x7F` (32-127) | Load custom tiles at 128+ |
+| Sysfont tile range | slots 0..255 (ASCII `0x20-0x7F`, katakana `0xA1-0xDF`) | Load custom tiles at 128+, AFTER the font call |
 | VRAMQ capacity | 16 commands | Overflow = silent drop, use `ngpc_vramq_dropped()` |
 | VRAMQ len unit | u16 words | Not bytes |
 | Window full screen | X=0, Y=0, W=160, H=152 | Some games use 159/151 — HW ambiguity |

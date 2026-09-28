@@ -233,6 +233,34 @@ unless the watchdog is cleared periodically from inside the loop body.
 
 ---
 
+### 3.9 `C7` / `D7` / `E7`: the extended-register escapes (`D7 FA 04` is `push QIZ`)
+
+`11zz0111` — `C7` (byte), `D7` (word), `E7` (long) — is followed by a full 8-bit **register
+code**, then the operation byte. It is the same register instruction set as the short
+`C8+r` / `D8+r` / `E8+r` forms, able to name what the 3-bit field cannot: the upper halves
+(`QWA`…`QIZ`), the bytes of IX/IY/IZ/SP, and registers of other banks.
+
+| code | meaning |
+|---|---|
+| `0xE0..0xFF` | current bank: register group `(code>>2)&7` (XWA…XSP), byte position `code&3` |
+| `0xD0..0xDF` | previous bank (XWA…XHL), written `A'`, `WA'`… |
+| `0x00..0xCF` | absolute bank `code>>4`, group `(code&15)>>2`, byte position `code&3` (`RW3`, `RWA3`…) |
+
+A word must sit at byte position 0 (low half) or 2 (Q half). Checked against the official
+assembler: `C7 31 A9` = `ld RW3,1`, `C7 F0 A9` = `ld IXL,1`, `C7 E2 A9` = `ld QA,1`,
+`D7 30 A9` = `ldw RWA3,1`, `C7 F0 0A C0` = `div IX,0xC0`.
+
+⛔ **`D7 FA 04` / `D7 FA 05` are `push QIZ` / `pop QIZ`**, emitted by cc900 in ordinary
+function prologues and epilogues (`0xFA` = XIZ, position 2). A disassembler that does not know
+the escape shows "`D7 FA`" as an invalid or suspect pair followed by a stray byte. That is a
+**decoder** error: do not rewrite functions (e.g. turning locals into `static`, which costs RAM
+and reentrancy) on the strength of it. Cross-check any "invalid opcode" alarm against the
+compiler's own `-S` listing before acting.
+
+Related decoder trap — **byte `mul`/`div` destinations**: the 3-bit RR field is not an index.
+At byte size only odd codes exist (001 WA, 011 BC, 101 DE, 111 HL); at word size 000..111 =
+XWA..XSP. So `CE 53` is `div BC,H`, not `div HL,H`.
+
 ## 4. LDIRW Block Copy Pattern
 
 `LDIRW`: copies `BC` words (2 bytes each) from `XHL` to `XDE`.

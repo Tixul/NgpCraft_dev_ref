@@ -375,6 +375,108 @@ world_x = (s16)(((s16)src->x * 8) - render_off_x);
 **Rule:** always cast to `s16` or `u16` **before** multiplying a `u8` by a constant
 that can produce a result > 255. Common cases: tile coordinates x 8, indices x stride.
 
+### 8.1b The width of an expression is DECLARED — even for a plain addition
+
+§8.1 is not limited to multiplications by a literal. Two more forms, both measured on a
+shipped ROM:
+
+```c
+u8 n = 7;
+u8 bound = (u8)((n * 30u + 50u) / 100u);       /* WRONG: 0 */
+u8 bound = (u8)(((u16)n * 30u + 50u) / 100u);  /* right: 2 */
+
+u16 step = (u16)(frac + speed);                /* WRONG: the SUM is 8-bit */
+u16 step = (u16)((u16)frac + (u16)speed);      /* right */
+```
+
+The first computed `7 × 30 + 50 = 260` on eight bits, `u` suffix or not → 4 → 0. It was one
+of three difficulty thresholds; the two others (120 and 225) fitted in a byte, so **one wrong
+threshold out of three** — the best way to go unnoticed. The second has no literal and no
+multiplication at all — two `u8`, the result cast — and cc900 still adds on eight bits. The
+emitted assembly says it (`cc900 -S` on a minimal fragment):
+
+```
+    ld   C,(_frac)
+    add  C,(XSP+0x4)      ; EIGHT bits: the carry is lost
+    extz BC               ; the widening comes AFTER
+```
+
+It was a scenery step in 16ths: as soon as `frac + speed` passed 255 — at 96 mph — the step
+wrapped to zero and roadside posts froze on screen for up to 74 % of frames at 100 mph.
+Reported from the console as "at 100 mph the posts freeze".
+
+**Rules:** cast the FIRST operand (it decides the width of the whole expression), and for an
+addition cast **every** operand. ⛔ **A symptom that depends on a VALUE THRESHOLD is a width
+symptom**: compile a minimal fragment with `-S` before suspecting the logic — it takes a
+minute and settles it.
+
+### 8.1c An `int` constant expression is 16 bits
+
+```c
+#define GAIN  (512 * 256 / (N * (N + 1)))   /* 131072 wraps to 0 in a 16-bit int */
+```
+
+The constant folded to zero, the gain to zero, and a whole rendering path silently produced
+zeros — which looked like "nothing happens", not like an overflow. Write such constants in
+two steps (`(256 / ...) * 512` with care for rounding) or with an explicit `UL`, and check the
+emitted value.
+
+### 8.1d Array sizes are rounded UP to an even size
+
+`u8 tune[9]` occupies **10** bytes and `u8 gear_top[5]` **6**, not just aligned: the SIZE is
+rounded. A save struct planned at "+2 bytes" measured **+4**; a state block's counters sat at
+offsets 84/85, not 83/84. **Find a field by DIFFING RAM** before/after an action that changes
+it, not by adding up sizes — and assert offsets at compile time (§8.5c).
+
+### 8.1e Right-shifting negative values, and signs in general
+
+A right shift of a signed value is not a reliable arithmetic shift on this toolchain: work
+on the unsigned magnitude and re-sign. An expression mixing shifts and signs produced a
+non-monotonic output (30, 33, 32) for a steadily decreasing input; replacing `>>` by
+divisions did not fix it. Do not trust such an expression — measure it.
+
+### 8.1f `%` and `/` compile to a NARROW hardware divide — indeterminate on overflow
+
+Without the `-A` (ANSI) option, cc900 does not widen the operands of a multiply or a divide:
+it uses the machine instruction at the operands' own width. The Toshiba compiler manual says
+so explicitly (section 3.12.2, *Arithmetic Conversion of Multiplication and Division*): `div`
+may be used for division **and remainder**, and "it does not get an expected result when a
+quotient overflows".
+
+A typical victim is a shuffle:
+
+```c
+u16 state = prng_next();
+j = (u8)(state % i);            /* i is a u8 loop counter */
+```
+
+compiles to a **16/8** divide — `div BC,H`, bytes `CE 53` — whose quotient must fit in **8
+bits**. `38457 % 71` has a quotient of 541: the CPU sets V and the destination is
+**indeterminate**. The "remainder" is then used as an index, unchecked, and the swap reads and
+writes outside the array. `u32 % u16` is the same trap at the next size (it is the manual's own
+example).
+
+* **Casting the divisor to `u16` is NOT enough** — cc900 still emits `div BC,H`.
+* **Emulators usually hide it**: they compute the remainder with the host's `%` and only raise
+  V, so the game works on the emulator and misbehaves on the console from the same seed.
+* `u8 % u8` is safe: an 8-bit dividend cannot overflow an 8-bit quotient.
+
+Fixes, by increasing locality:
+
+1. compile the file with `-A` — cc900 then emits a 32/16 divide with zero-extension; `-A`
+   also changes every other expression of the file (including the char additions of §8.1b,
+   which the same manual section documents), so re-check the file;
+2. two narrow divides whose quotients always fit:
+   ```c
+   u8 hi = (u8)((u8)(state >> 8) % n);
+   j     = (u8)((((u16)hi << 8) | (u8)state) % n);   /* dividend < n*256 */
+   ```
+3. a shift/subtract reduction (16 steps, no RAM, no call).
+
+**Detect it:** look at the emitted assembly (`cc900 -S`) of every `%` and `/` that feeds an
+index; a `div` whose destination is one size wider than a small divisor, with a dividend that
+can be large, is the pattern. (`ngpc_bug_check` query: `modulo`.)
+
 ### 8.2 Linker Order: Sprites After Maps -> Wrong Bank
 
 **Symptom:** sprites are invisible (only 1 visible out of N), corrupted display for
@@ -527,6 +629,78 @@ Same-family bug: `t900cc` also miscompiles `s8 != s8 || s8 != s8`. Store interme
 comparison results in explicit `u8` variables if the expression mixes multiple `s8`
 comparisons.
 
+### 8.5b The Makefile does not track headers — stale objects, green build
+
+A typical `.rel: .c` rule makes each object depend only on its `.c`. Change a `.h` and
+**nothing** rebuilds: the object stays the old one, the link succeeds, the ROM is built, and
+make says nothing. Paid twice in one evening on a finished game: a count raised in a header
+(8 → 9 bodies) while one object still had 8 — the new entry fell out of range and took the
+fallback art; and a screen photographed from an object whose source had already been
+rewritten.
+
+**Rules:**
+
+* after any `.h` change, delete the objects before measuring anything — or declare the
+  header dependencies explicitly in the Makefile (generated asset headers included: a tile
+  count in a header is read by the loader);
+* a source file restored **within the same second** as its `.rel` is not recompiled — delete
+  the `.rel`; a file copied with its original timestamp (e.g. PowerShell `Copy-Item`) is not
+  rebuilt either — touch it;
+* a header of the cartridge (title bytes) not listed as a dependency keeps the old title in
+  a green build — check the bytes at the header offset;
+* **prove freshness by the ROM's bytes**: a string you just added must be in the ROM, one
+  you just removed must not ([Measuring Performance](../05_Systems/Measuring-Performance.md) §5.3).
+
+### 8.5c Separate `.asm` modules called from C — what a finished game measured
+
+* **Calling convention:** parameters on the stack, `(xsp+4)` for the first; **only `XIZ`
+  must be preserved** (cc900 pushes it whenever it uses it); XWA XBC XDE XHL XIX XIY belong
+  to the callee. Safest: pass ONE pointer to a parameter block filled by C on its own stack,
+  read it with `(xsp+4)` on entry (`(xsp+8)` after `push xiz`), and hard-code the field
+  offsets in the `.asm` — guarded on the C side by
+  ```c
+  typedef char chk_block[(sizeof(Block) == 24) ? 1 : -1];   /* THC1-Error-239 if it moves */
+  ```
+  cc900 then refuses to compile ("Negative subscript") if a field moves.
+* **Two arrays through ONE register:** when a loop reads several arrays per step, group them
+  in a struct so their distances are fixed, and read them by displacement `(xix+OFFSET)` on
+  one pointer. When registers run out, put the loop's constants on ITS OWN stack
+  (`lda xsp,xsp-F_SIZE`, read by `(xsp+d)`).
+* ⛔ **A is the low byte of XWA** (W the next; B, C of XBC; etc.). `ld a,(...)` while XWA holds
+  a pointer DESTROYS it — a counter ended up written into the stack instead of its block.
+* **INC/DEC on 16/32-bit registers do not set the flags** ([Assembly](Assembly.md) §3.1b): end a
+  loop with `sub bc,1` then `j ne`, or `decb 1,(mem)`, or an 8-bit `dec`. There is no
+  pre-decrement in what cc900 emits: go down with a separate `dec 2,xix`; post-increment
+  `(xix+:1)` exists.
+* **Only use instruction FORMS the compiler already emits** in your project (mnemonic +
+  operand class: register size, addressing mode, displacement size). The known silicon traps
+  of this CPU all came from encodings Toshiba's compiler never emits. A script that compares
+  every instruction of the hand-written file against the `-S` output of the project is cheap
+  and settles it.
+* **The file must be ASCII and CRLF** ("ASM900-Fatal-152: Illegal source file format"), and
+  `$MAXIMUM` must precede the `equ`s ("Illegal control").
+* **Public twin labels** `<function>__L<n>` emit no byte and give a profiler the per-block
+  detail of a hand-written routine.
+* **Keep the C version behind a switch**: it is the readable reference, and an equivalence
+  gate can compare both ([Measuring Performance](../05_Systems/Measuring-Performance.md) §5.1).
+
+### 8.5d A ROM table of pointers to far data is not reliable
+
+In this memory model, cc900 did not read correctly a ROM table of pointers to far data — a
+set of background bands came out as one repeated character. What works: **fill a struct in
+RAM from a branch** (`switch`/`if` chain) once per load, then read the struct. And do not
+leave the chain as a per-word accessor: a page renderer calling "which asset?" for each
+16-bit word did twelve thousand comparisons to copy 3 200 bytes ([Game Loop](../05_Systems/Game-Loop.md)
+§5.4).
+
+### 8.5e Scripted edits can inject raw NUL bytes
+
+`'\0'` written through a shell heredoc into a Python patch script became a **raw zero byte**
+in the `.c` file. It compiles; but `file` then says "data", `grep` refuses the file, and a
+missing terminator gets suspected. Count `b.count(0)` in every source file after a scripted
+edit, and write patch scripts to a file rather than through a heredoc. And encode BEFORE
+opening for write: `open(p, "w")` truncates first, so an encoding error leaves an empty file.
+
 ### 8.6 Full Pitfall Table
 
 | Symptom | Probable cause | Fix |
@@ -544,6 +718,12 @@ comparisons.
 | Out-of-RAM / random crash | Pool defaults 16/8/16/64 too large | Size pools to scene entity counts |
 | Entity on path stuck and not moving | step_toward stops at `+/-step` without reaching exact target | Snap-to-target: return `diff` when `|diff| <= step` |
 | Enemies at wrong position before camera reaches them | Off-screen guard applies velocity to all | Freeze if `screen_x > 256` (ahead), drift only if `screen_x < -96` (behind) |
+| Works up to a value, then breaks | Expression computed on 8 bits — including `u8 + u8` | Cast every operand to `u16`; check with `cc900 -S` (§8.1b) |
+| A whole effect silently zero | `int` constant expression above 32 767 folded | Two-step constant or `UL`; check the emitted value (§8.1c) |
+| Struct field one byte off | Array size rounded up to even | Diff RAM to locate fields; compile-time size assert (§8.1d) |
+| A header change has no effect | Makefile does not track headers | Delete objects; prove freshness by ROM bytes (§8.5b) |
+| Hand-written `.asm` corrupts a neighbour variable | `ld a,(...)` while XWA held a pointer (A = low byte of XWA) | Only compiler-emitted forms; register map per routine (§8.5c) |
+| Shuffle/index wrong on console only | `u16 % u8` (or `u32 % u16`) compiled to a narrow `div` without `-A`; quotient overflow → indeterminate remainder | `-A`, two narrow divides, or shift/subtract (§8.1f) |
 
 ---
 
