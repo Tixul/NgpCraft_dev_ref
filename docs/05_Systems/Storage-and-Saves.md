@@ -609,22 +609,21 @@ watchdog sequence, and follow the rules of §5.2b around it.
 **Standalone sequence (template default):**
 
 ```asm
-; --- Common prologue ---
-ld  (0x6E), 0x14        ; WDMOD: clear the watchdog enable (disable, step 1)
-ld  (0x6F), 0xB1        ; WDCR: disable code (step 2) -- clear with 0x4E FIRST, see 5.2b
+; --- Common rule: the watchdog is NEVER switched off (5.2b, rule 2) ---
+; WDMOD (0x6E) is never written; WDCR (0x6F) is cleared around every call.
 
 ; --- Erase block 33 (F16_B33, 8 KB, abs 0x3FA000) ---
 ld  xde, 0x6E00         ; destination: RAM
-ld  xhl, _erase_stub    ; source: 98-byte AMD erase sequence in ROM
-ld  bc,  98
+ld  xhl, _erase_stub    ; source: 101-byte AMD erase sequence in ROM (watchdog-clearing, 5.2b)
+ld  bc,  101
 ; ldir — copy stub to RAM (stubs cannot run from the flash chip itself)
 ld  xix, 0x200000       ; AMD unlock base = CS0
 ld  xiy, 0              ; XIY = 0 (erase stub parameter)
 ld  a,   0              ; A   = 0 (erase stub parameter)
 ld  xde, 0x3FA000       ; block address (absolute)
-call 0x6E00             ; execute stub from RAM
-ld  (0x6F), 0x4E        ; restore watchdog
-ld  (0x6E), 0xF0        ; WDMOD: watchdog re-enabled (better: restore the SAVED mode)
+ld  (0x6F), 0x4E        ; clear the watchdog right before
+call 0x6E00             ; execute stub from RAM (it clears the watchdog while it waits)
+ld  (0x6F), 0x4E        ; and right after
 
 ; --- Write 512 bytes ---
 ld  xhl, (xsp+4)        ; source pointer (from C stack, bank-0 — no bank-3 promotion needed)
@@ -637,10 +636,10 @@ ld  xhl, _write_stub    ; source: 115-byte AMD write sequence in ROM
 ld  bc,  115
 ; ldir — copy stub to RAM
 ; [pop xhl / pop xde — restore src and dest]
-ld  bc,  0x0002         ; 2 pages × 256 = 512 bytes
+ld  bc,  0x0002         ; 2 pages × 256 = 512 bytes (~17 ms)
+ld  (0x6F), 0x4E        ; clear the watchdog right before
 call 0x6E00
-ld  (0x6F), 0x4E
-ld  (0x6E), 0xF0
+ld  (0x6F), 0x4E        ; and right after
 ```
 
 **Legacy sequence (system.lib path, kept as reference):**
@@ -674,10 +673,20 @@ each one met in a shipped homebrew:
    system-call documentation prohibits interrupts during flash operations (the `swi 1` path
    masks them). Wrap as `push sr / di / … / pop sr` — **not** a closing `ei`, which forces
    interrupts on even when the caller had them off.
-2. **Watchdog (`0x6E` WDMOD, `0x6F` WDCR): clear it first, then change the mode.** Write `0x4E`
-   to `0x6F`, save WDMOD, disable (`0x14` → `0x6E`, `0xB1` → `0x6F`), do the operation, restore
-   the SAVED mode, clear again. Changing the mode first makes the outcome depend on how long
-   ago the last VBlank cleared the counter.
+2. **Watchdog (`0x6E` WDMOD, `0x6F` WDCR): never switch it off — clear it, including inside
+   the erase stub's wait loop.** The stubs as extracted switch it off (`0x14` → `0x6E`,
+   `0xB1` → `0x6F`) and back on with a fixed `0xF0` → `0x6E`. On hardware this switched the
+   console off **one block erase in two**, at random: no system power request (`0x6F85` never
+   set, so not the batteries), the target block untouched afterwards (the erase never
+   started), and no emulator reproduced it. The earlier advice here (clear first, save WDMOD,
+   restore the saved mode) was a hypothesis, never tested on hardware. **Validated on a
+   console:** never write WDMOD; write `0x4E` to `0x6F` right before and right after each call;
+   and put that write at the top of the erase stub's wait loop (listing below), so the
+   watchdog is cleared however long the erase takes (57 ms measured on a cartridge against a
+   ~100 ms watchdog; a modern flash cart can be slower). The 115-byte write stub programs 512
+   bytes in ~17 ms and only needs the clear before the call. A game that erases rarely (one
+   erase every ~30 saves with append-only slots) can ship with this bug unseen; a game whose
+   save fills a block erases on every save and meets it at once.
 3. **Return the stub's status to C and act on it.** An erase that failed must not be followed by
    a write into "slot 0". Verify all 8 KB read `0xFF` after an erase and the 512 bytes after a
    program.
@@ -689,6 +698,35 @@ each one met in a shipped homebrew:
    fresh emulator instance). Most emulators program instantly and do not model the watchdog,
    so none of rules 1–2 can be reproduced there — see
    [Measuring Performance](Measuring-Performance.md) §8.1 for a console test protocol.
+
+**Watchdog-clearing erase stub (101 bytes).** The extracted 98-byte stub with `08 6F 4E`
+(`ld (0x6F),0x4E`) inserted at offset `0x35`, the top of its wait loop, and the backward jump
+re-aimed (`66 ED` → `66 EA`); copy 101 bytes (`0x65`) to `0x6E00`. Same interface (`XIX` =
+`0x200000`, `XDE` = block address, `XIY` = 0, `A` = 0; `A` = `0xFF` after the time-out):
+
+```asm
+_erase_stub:
+        db      0xF3,0xF1,0x55,0x55,0x00,0xAA,0xF3,0xF1,0xAA,0x2A,0x00,0x55
+        db      0xF3,0xF1,0x55,0x55,0x00,0xF0,0x00,0x00,0xF3,0xF1,0x55,0x55
+        db      0x00,0xAA,0xF3,0xF1,0xAA,0x2A,0x00,0x55,0xF3,0xF1,0x55,0x55
+        db      0x00,0x80,0xF3,0xF1,0x55,0x55,0x00,0xAA,0xF3,0xF1,0xAA,0x2A
+        db      0x00,0x55,0xB2,0x00,0x30,0x08,0x6F,0x4E,0x82,0x3F,0xFF,0x66
+        db      0x15,0xED,0x61,0xED,0xCF,0xFF,0xFF,0x1F,0x00,0x66,0x09,0xB2
+        db      0xCD,0x66,0xEA,0x82,0x3F,0xFF,0x66,0x02,0x21,0xFF,0xF3,0xF1
+        db      0x55,0x55,0x00,0xAA,0xF3,0xF1,0xAA,0x2A,0x00,0x55,0xF3,0xF1
+        db      0x55,0x55,0x00,0xF0,0x0E
+```
+
+```asm
+0x35: 08 6F 4E           ld   (0x6F),0x4E     ; loop: watchdog cleared
+0x38: 82 3F FF           cp   (XDE),0xFF      ; erased?
+0x3B: 66 15              jr   z,done
+0x3D: ED 61              inc  1,XIY
+0x3F: ED CF FF FF 1F 00  cp   XIY,0x1FFFFF    ; time-out
+0x45: 66 09              jr   z,fail          ; A = 0xFF
+0x47: B2 CD              bit  5,(XDE)         ; DQ5
+0x49: 66 EA              jr   z,loop
+```
 
 ### 5.3 cc900 Inline ASM Pointer Rules
 
@@ -725,7 +763,7 @@ a guard `(void)data`, to ensure the stack prologue stays predictable for the `xs
 | Block 0x1F | Overlaps system reserved area | Use block 0x21 |
 | Erase on every save | Flash wear, risks mid-session failure | Append-only slots |
 | "No crash" = success | False | Validate with full power-cycle test |
-| Watchdog left running across an erase | ~57 ms with interrupts masked and no VBlank to clear it | Clear (`0x4E`→`0x6F`), save WDMOD, disable (`0x14`→`0x6E`, `0xB1`→`0x6F`), restore the saved mode after (§5.2b) |
+| Watchdog switched off for an erase (`0x14`→`0x6E`, `0xB1`→`0x6F`, back on with `0xF0`) | Console switched off one erase in two, emulators never show it | Never write WDMOD; clear (`0x4E`→`0x6F`) before and after the call and inside the erase stub's wait loop (101-byte stub, §5.2b) |
 | Flash wrapper without `di`, or ending with `ei` | An interrupt fetches the ROM ISR from the busy chip; `ei` turns interrupts on for a caller that had them off | `push sr / di / … / pop sr` (§5.2b) |
 | Stub status ignored | A failed erase is followed by a write into slot 0 | Return the status; verify 8 KB `0xFF` after erase, 512 bytes after write |
 | Executing stub from flash | Undefined behavior (chip busy during program) | Copy stub to RAM at `0x6E00`, execute from there |

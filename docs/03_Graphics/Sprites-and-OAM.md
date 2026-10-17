@@ -245,8 +245,9 @@ The concept works in principle but fails in practice on NGPC hardware: the Timer
 HBlank window cannot accommodate the required memory operations before the next
 scanline begins, causing visual corruption at any non-trivial sprite count.
 
-For >64 logical sprites, the validated solution is a single DMA copy from shadow OAM
-to `0x8800` in VBlank — zero HBlank pressure, production-safe, hardware-confirmed.
+A shadow-OAM copy in VBlank (§5, [DMA](DMA.md)) makes 64 sprites cheap and tear-free; it
+does **not** show more than 64. For more than 64 visible sprites, see §3.7: one split per
+frame instead of one interrupt per scanline.
 
 ---
 
@@ -282,6 +283,52 @@ sprites**, and a second colour layer doubles it.
 
 A module whose `frame()` hides the whole tail of its reservation will erase a newcomer placed
 in that tail: shrink the reservation in the code first.
+
+### 3.7 More than 64 sprites: two bands, one Timer0 split
+
+The multiplexer of §3.4 failed because it asked for one interrupt per scanline. A design
+published in a 2003 homebrew demo needs **one interrupt per frame**:
+
+1. Keep two complete OAM images in RAM: band A (upper part of the screen) and band B (lower
+   part), each with its `0x8C00` palette bytes.
+2. In VBlank, copy band A to `0x8800`/`0x8C00`, then restart Timer0 counting HBlank pulses
+   (`T01MOD = 0`: clock = TI0 = HBlank). Stop it before re-arming: stopping clears the counter.
+3. When it reaches the split, its interrupt stops the timer and copies band B over the same
+   slots. During VBlank the K2GE emits one HBlank pulse, at the start of line 198, before lines
+   0, 1, 2…: a comparator of 76 fires during line ~75.
+
+The top of the screen shows band A, the bottom band B: up to **128 sprites** for one block
+copy per frame.
+
+**The rule that makes it work: a band with no sprite around the split.** During the copy the
+OAM is half A, half B. That is harmless as long as no sprite of either band touches the lines
+the copy crosses: an A sprite there is already drawn, a B sprite has not started. The same
+empty lines absorb the delay that OAM writes during display add to the drawing of a line (too
+many sprites on such a line and some disappear: Character Over, bit 7 of `0x8010`). The
+reference demo leaves 16 empty lines: band A ends at line 63, band B starts at 80, comparator 76.
+
+| Refinement | Why |
+|---|---|
+| Copy only the slots band B uses | 16 B sprites = 40 words instead of 160 |
+| Palettes (`0x8C00`) before positions; band B sorted by Y | the topmost B sprite gets its palette before its new position |
+| Two buffers per band, published with one byte, adopted in VBlank | the ISR never copies a half-built frame |
+| Interrupt handlers in a real `.asm` file | a C function ending in an inline `reti` breaks on the first local |
+| Pinned slots `0..P-1` that the split never rewrites | the one object that must cross the empty band (a player); capacity 128 − P |
+| Hide the slots the previous frame used and this one does not | a shrinking band leaves no ghost |
+
+**Let the console measure the copy**: read `RAS.V` (`0x8009`) at ISR entry and after the copy;
+the difference is the copy length in scanlines ([Measuring Performance](../05_Systems/Measuring-Performance.md) §3.8). In an
+emulator a 60-sprite band B copies in 4 lines, entered at line 74; the delay of mid-frame OAM
+writes is not modelled there, so the minimum gap must be measured on the console.
+
+**Feed it in batches.** One C call per sprite costs more than the copy: with cartridge wait
+states, 120 C calls per frame held a scene at ~21 fps, one assembly call per object strip
+brought the same scene to ~59 fps ([Measuring Performance](../05_Systems/Measuring-Performance.md) §4.9).
+
+**Design for the band.** It suits screens that already have a sprite-free strip: a road and
+river crossing game (the middle bank; only the player crosses it, in pinned slots), a playfield
+above a HUD, a versus split. Bullets that cross the whole screen do not fit: they need a
+64-sprite fallback (flicker) or tiles.
 
 ## 4. Performance Checklist
 

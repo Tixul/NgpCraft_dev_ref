@@ -89,7 +89,7 @@ Full treatment, including the baud arithmetic and the CTS/RTS rules: [Link Cable
 | Register | Address | Size | Description |
 |----------|---------|------|-------------|
 | `HW_WATCHDOG` | `0x006F` | u8 | Watchdog — write `0x4E` to reset |
-| `WDMOD` | `0x006E` | u8 | Watchdog mode (IO900H.H). `0x14`, then `0xB1` into WDCR = disable. **NOT a cartridge /WE control** |
+| `WDMOD` | `0x006E` | u8 | Watchdog mode (IO900H.H). `0x14`, then `0xB1` into WDCR = disable. **NOT a cartridge /WE control.** Never write it around flash operations: clear WDCR instead (Storage §5.2b, rule 2) |
 | `HW_TRUN` | `0x0020` | u8 | Timer run control (bit0=TIM0, bit1=TIM1...) |
 | `HW_TREG0` | `0x0022` | u8 | Timer 0 reload value |
 | `HW_TREG1` | `0x0023` | u8 | Timer 1 reload value |

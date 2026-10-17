@@ -313,8 +313,9 @@ u16 result = (u16)a * (u16)b;   /* same type = hardware MUL opcode */
 
 - `switch` with >=8 dense cases -> cc900 generates a jump table automatically
 - cc900 **never** emits `DJNZ` — uses `dec reg; jr NZ` instead
-- **Callee-saved:** `XIY`, `XIX` (if used)
-- **Caller-saved:** `XWA`, `XBC`, `XDE`, `XHL`
+- **Callee-saved:** `XIZ` — pushed on entry by every function that uses it (`QIZ`
+  included); cc900 keeps values in it across calls
+- **Caller-saved:** `XWA`, `XBC`, `XDE`, `XHL`, `XIX`, `XIY` (evidence: [Assembly](Assembly.md))
 
 ---
 
@@ -851,14 +852,14 @@ CC900's ABI:
 
 | Aspect | NgpCraft ABI (`__cdecl`) | CC900 (reference) |
 |--------|--------------------------|-------------------|
-| Arg passing | All args on stack, right-to-left | arg1=XWA, arg2=XBC, arg3=XDE, rest stack (`__adecl`) |
+| Arg passing | All args on stack, right-to-left | All args on stack, right-to-left (default); `__adecl` passes arg1..3 in XWA/XBC/XDE |
 | 1-byte args | Extended to 2 bytes on stack | Same |
 | Return <= 4 B | `XHL` | `XHL` |
 | Return > 4 B | Hidden pointer in XWA | Hidden pointer in XWA |
 | Frame | `link XIY, 0` / `unlk XIY` | `lda XSP, XSP-N` (no link on leaf) |
 | Locals access | `XIY + disp` | `XSP + disp` or `XIZ` subregs |
-| Caller-saved | XWA, XBC, XDE, XIX, XIY, XIZ | XWA, XBC, XDE, XHL |
-| Callee-saved | XHL | XIY, XIX |
+| Caller-saved | XWA, XBC, XDE, XIX, XIY, XIZ | XWA, XBC, XDE, XHL, XIX, XIY |
+| Callee-saved | XHL | XIZ |
 
 Consequence: mixing cc900-compiled object files with NgpCraft-compiled objects in the
 same ROM **is not supported**. Pick one toolchain per ROM.

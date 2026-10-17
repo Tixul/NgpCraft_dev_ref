@@ -68,12 +68,36 @@ XSP         : stack pointer
 | Return `u32` | `XHL` (not `XWA`) |
 | General accumulator | `A` |
 | LDIRW/LDIR counter | `BC` |
-| Caller-saved | `XWA`, `XBC`, `XDE`, `XHL` |
-| Callee-saved | `XIX`, `XIY` |
+| Caller-saved (scratch) | `XWA`, `XBC`, `XDE`, `XHL`, `XIX`, `XIY` |
+| Callee-saved | `XIZ` (all 32 bits, `QIZ` included) |
 
 > **Important:** do not use `A` or `WA` to return values to C code — cc900 reads
 > the return value from `L` / `HL` / `XHL` depending on type. Any code using `WA`
 > for a return value is incorrect.
+
+> **Corrected: `XIZ` is the callee-saved register, not `XIX`/`XIY`.** Earlier versions of
+> this page said the opposite. In every cc900-compiled function checked (25 functions in
+> three translation units), `XIZ` — or `QIZ` when only its upper half is used — is pushed on
+> entry and popped before `ret`, while `XIX` and `XIY` are used without being saved. A
+> function that must keep values across a call keeps them in `XIZ`:
+>
+> ```
+> _f:  dec 0x4,XSP
+>      push XIZ
+>      ...
+>      ld   QIZ,WA        ; a value that must survive the call
+>      push DE
+>      cal  _g
+>      ld   IZ,HL         ; another one, across the second call
+>      push IZ
+>      cal  _g
+>      ...
+>      pop  XIZ
+> ```
+>
+> So an assembly routine called from C may clobber `XIX`/`XIY` freely but **must restore
+> `XIZ`**, and C code never expects `XIX`/`XIY` to survive a call. Arguments are on the
+> stack by default (`__adecl` is the opt-in register convention).
 
 ---
 
@@ -412,8 +436,8 @@ the same symbols and will cause linker conflicts.
 | static C var | Not exported — declare non-static to share with ASM |
 | LDIRW speed | ~4x faster than C byte loop for block copies |
 | LDIRW BC=0 | = 65536 iterations — never pass 0 to LDIRW |
-| Callee-saved | `XIX`, `XIY` |
-| Caller-saved | `XWA`, `XBC`, `XDE`, `XHL` |
+| Callee-saved | `XIZ` (all 32 bits, `QIZ` included) |
+| Caller-saved | `XWA`, `XBC`, `XDE`, `XHL`, `XIX`, `XIY` |
 
 ---
 

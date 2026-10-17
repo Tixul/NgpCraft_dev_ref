@@ -400,7 +400,7 @@ buffers and the TX/RX interrupts; you only call the vectors.
 > These 11 vector numbers are **absent from every public `ngpc.h`** — recovered from
 > the BIOS dump (table @ `0xFFFE00`) and each routine disassembled to confirm its
 > identity. A full write-up + ready-to-use C stub (`serial.c/.h`, `com.inc`) lives in
-> the NGPC_RAG research tree under `04_MY_PROJECTS/serial_link/`.
+> the author's research notes (not published).
 
 ### 10.1 Vector roles (all verified on the BIOS)
 | Vector | # | Role | I/O |

@@ -1014,6 +1014,30 @@ non-zero at power-on, so the intro tick never ran, one text band stayed at its i
   whatever you *wait for* is then also garbage — a loop "until `lives != 0`" exits
   immediately on a `0xA5` fill, before the game has executed anything.
 
+**Recipe: zero the statics yourself.** With cc900 the statics live in section `f_area`, from the
+start of RAM (`0x4000`) up to the linker symbol `__DataRAM` (`addr(far_data)` in the usual
+`ngpc.lcf`, i.e. the end of `f_area`). Call this first in `main()`, before any library init,
+which writes statics too:
+
+```c
+extern u8 _DataRAM[];          /* __DataRAM in the linker file */
+
+void ClearStaticRam(void)
+{
+    volatile u8 *p = (volatile u8 *)0x4000;
+    while (p < (volatile u8 *)_DataRAM)
+        *p++ = 0;
+}
+```
+
+Locals are on the stack at the top of RAM and are not touched. If the map shows an `f_data`
+section, its initial values must also be copied from ROM: zeroing does not restore them.
+
+**Detect it before the console does.** An emulator that records, per work-RAM byte, whether it
+was written since power-on reports every global read before its first write. One such report
+named a frozen game's culprit directly: a `paused` flag read 38 times before being written —
+zero in the emulator, non-zero on the console, so the game sat paused forever.
+
 *Contributed by [Napsterix](https://github.com/Napsterix).*
 
 ---

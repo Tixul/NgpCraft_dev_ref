@@ -966,6 +966,13 @@ code 0x13, then qualifier byte:
 (r32+)  -> code 0x15, then r32 index (post-increment after access)
 ```
 
+> **The step is in the operand byte, not in the instruction size.** The byte after the prefix
+> is `rrrrrr ss`: an extended register code (current bank `XWA` = `E0`, `XBC` = `E4` …
+> `XSP` = `FC`) and a step `ss`: `00` → 1, `01` → 2, `10` → 4 (`11` is undefined). The CPU moves
+> the pointer by the encoded step. asm900 encodes the step that matches the operand size —
+> `ld a,(-xde)` = `C4 E8 21`, `ld hl,(-xde)` = `D4 E9 23`, `ld xhl,(-xde)` = `E4 EA 23` — so a
+> hand-assembled `D4 E8 23` decrements by 1 where a word access was meant.
+
 ---
 
 ## 28. Opcode Encoding — Fixed Sequences

@@ -315,7 +315,7 @@ Takeaways for your own protocol:
 Everything above is the transport. A game needs one layer more: find the peer, decide
 who is who, frame the bytes, notice a disconnection. That layer exists as a drop-in
 module in the base template, `optional/ngpc_link/`, and is used by a complete two-player
-game (`04_MY_PROJECTS/Fini/NeoGeo_Windcup`, doc `LINK_2P.md`).
+game.
 
 ### 8.1 What it adds over the BIOS calls
 

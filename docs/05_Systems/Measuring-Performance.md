@@ -237,6 +237,26 @@ exist. Reading the bullet array directly showed the real difference (20 → 0).
   accuses an innocent costs more than a silent one.** And break every gate on purpose once:
   a gate that has never failed has not been shown to work.
 
+### 3.8 Let the console measure itself: read `RAS.V` in the interrupt
+
+A coloured band read off the screen gives a fuzzy number. `RAS.V` (`0x8009`, readable at any
+time, VBlank included) is the current scanline: store it on ISR entry and again after the work,
+and the difference is the cost in scanlines, measured by the console itself. Keep a running
+maximum and show the three numbers (entry line, last span, worst span) in a debug HUD, with a
+button that resets the maximum.
+
+```asm
+    ld   a,(0x8009)          ; entry line
+    ld   (_isr_line),a
+    ...                      ; the work being measured
+    ld   a,(0x8009)
+    sub  a,(_isr_line)
+    ld   (_isr_span),a       ; lines spent
+```
+
+Two reads and a subtraction. The entry line also calibrates a Timer0 split: which line does
+comparator N really fire on, with your VBlank handler in front of it?
+
 ## 4. Techniques with measured outcomes
 
 Sizes are project-specific; the *sign* and the reasoning generalize.
@@ -366,6 +386,15 @@ change: the closed loop compensates (it reaches corners earlier, leaves the road
 more time slow). What the player feels is the INSTANTANEOUS ratio at a READ speed — measure
 units per frame bucketed by speed, and separately frames per loop turn on the shipped ROM.
 Neither alone says what the eye sees.
+
+### 4.9 Per-element C calls cost more than the work
+
+A sprite builder that calls a C function once per 8×8 tile pays argument pushes, validation and
+slot arithmetic per tile, all fetched from the cartridge. Measured in an emulator with calibrated
+wait states on a 120-sprite scene: one C call per tile gave 214 frames for 600 VBlanks (~21 fps);
+one assembly call per object — a column-major strip of 2×N tiles, clipped, written straight into
+the back buffer — gave 593 for 600 (~59 fps), same picture. Validate once per object, batch per
+object, and put the inner loop in assembly.
 
 ## 5. Regression: prove behaviour did not change
 
