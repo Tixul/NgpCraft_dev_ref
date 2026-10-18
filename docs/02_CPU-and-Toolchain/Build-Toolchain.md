@@ -10,14 +10,21 @@ Build commands, cc900 compiler rules (C89 compliance, NGP_FAR, volatile, ISR, in
 cc900 is Toshiba's C compiler for the TLCS-900/H CPU. It is **strict C89** with
 proprietary extensions. The following restrictions apply.
 
-### 1.1 No `//` Comments
+### 1.1 `//` Comments: Accepted, but Prefer `/* */`
 
 ```c
-/* CORRECT */
+/* PREFERRED — portable C89 */
 x = 1; /* initialize x */
 
-// FORBIDDEN — cc900 rejects C++ comments
+// ACCEPTED by cc900 (Package Version 1.10, -O3 -Nb2), but not ISO C89
 ```
+
+Measured: a file using `//` comments compiles without error or warning. Use `/* */`
+anyway so the code stays valid for any strict C89 tool (linters, other compilers).
+
+The block-start rule (§1.2) applies to **every** block, including nested ones:
+`if (c) { int x = 5; ... }` is accepted, because `x` is declared at the start of
+its own block.
 
 ### 1.2 Declarations at Block Start Only
 
@@ -732,7 +739,7 @@ opening for write: `open(p, "w")` truncates first, so an encoding error leaves a
 
 | Item | Value / Rule |
 |------|-------------|
-| Comments | `/* */` only — no `//` |
+| Comments | `/* */` preferred — `//` is accepted by cc900 but is not C89 (§1.1) |
 | Declarations | Block start only — no declaration after a statement |
 | Loop variable | Declare before `for` — no `for (u8 i = ...)` |
 | No 64-bit | No `long long`, no `double`, no `float` |
