@@ -485,6 +485,33 @@ Fixes, by increasing locality:
 index; a `div` whose destination is one size wider than a small divisor, with a dividend that
 can be large, is the pattern. (`ngpc_bug_check` query: `modulo`.)
 
+### 8.1g A folded constant above 255 is truncated when it meets a `u8`
+
+```c
+u8 i;
+tab[10u * 32u + i] = 1;     /* WRONG: index computed as (u8)(64 + i) */
+tab[(u16)320u + i] = 1;     /* right */
+g = 248u + i * 8u;          /* WRONG: the whole sum stays on 8 bits */
+g = (u16)248u + (u16)i * 8u;   /* right */
+```
+
+`cc900 -S -O3` on that fragment:
+
+```
+    ld   A,0x40      ; 64 / 320   <- the folded constant, already truncated
+    add  A,C         ; 8-bit add with the u8 index
+    extz WA          ; widened too late
+```
+
+The same constant alone (`g = 10u * 32u;`) compiles to 320. The truncation only happens when the
+folded value is combined with an 8-bit operand — even though the constant is the **first** operand.
+So the "cast the first operand" rule of §8.1b has to be read literally: a literal above 255 does not
+widen the expression by itself, an explicit `(u16)` does.
+
+Met twice in one project: a map-row address (row 10 of a 32-wide map landed on row 2) and a 260-byte
+offset. **Rule:** write `(u16)` on any constant term that can exceed 255 in an expression that also
+contains a `u8`, or precompute the constant into a `u16` variable.
+
 ### 8.2 Linker Order: Sprites After Maps -> Wrong Bank
 
 **Symptom:** sprites are invisible (only 1 visible out of N), corrupted display for
