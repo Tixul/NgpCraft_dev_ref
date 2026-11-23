@@ -84,6 +84,9 @@ the machine and the techniques, not any single game or project.
 - **[Gameplay Patterns](06_Pipeline-and-Patterns/Gameplay-Patterns.md)** — State
   machines, pacing, and genre patterns (shmup, platformer, puzzle, grid, racing,
   adventure, roguelike/procedural dungeon).
+- **[Translating Commercial ROMs](06_Pipeline-and-Patterns/Translating-Commercial-ROMs.md)** —
+  Translating an existing game: making room on a second chip, finding and re-inserting
+  text, fonts, graphics, and proving nothing else changed.
 
 ---
 

@@ -431,8 +431,8 @@ own work RAM:
 
 The BIOS flash routine reads **this same byte** before touching anything (and returns
 error `0xFF` if it is zero), so reading it yourself is consistent by construction rather
-than a second opinion. `0x6C59` is the same thing for CS1 — the development board's slot,
-which is empty on a production console.
+than a second opinion. `0x6C59` is the same thing for CS1, the cartridge's **second chip** (at `0x800000`):
+`0` when there is none, set on the 32 Mbit and larger cartridges, which are two chips (see §5.0e).
 
 An **unknown value must mean "do not save"**, not a guessed default: failing to save is
 recoverable, erasing the wrong block is not.
@@ -565,6 +565,31 @@ writes through `VECT_FLASHWRITE` (`swi 1`), clearing the watchdog (`ld (0x6F),0x
 before and right after, and lets the system drive the bus; the erase keeps the RAM stub
 (`VECT_FLASHERS` is broken on the save blocks). A stub that DISABLES the watchdog and writes
 the clear code while it is off sends that code when it is not recognised.
+
+### 5.0e Cartridges larger than 2 MB are TWO chips
+
+Retail cartridges of **32 Mbit (4 MB)** exist, and 8 MB and 16 MB images run on flash carts.
+They are always **two chips**:
+
+| chip | select | CPU window | in the ROM file | size byte (BIOS) |
+|---|---|---|---|---|
+| first | CS0 | `0x200000`– | from offset 0 | `0x6C58` |
+| second | CS1 | `0x800000`– | from **half the file** (`0x200000` for 4 MB, `0x400000` for 8 MB, `0x800000` for 16 MB) | `0x6C59` |
+
+Practical points:
+
+* **The file size must be exact.** A "4 MB" file a few KiB too long was taken by an emulator
+  for an 8 MB image — second chip expected in the middle — and the whole second chip was read
+  from the wrong place. Pad to exactly 4 / 8 / 16 MiB.
+* **Each chip has its own block map and its own last blocks.** The save geometry of the
+  previous section applies per chip: a game that saves in the last blocks of the first chip
+  keeps doing so when the cartridge grows — but **a block NUMBER means a different address on
+  a bigger chip** (see the ROM translation page for what that does to a patched game).
+* **The second chip is ordinary code and data space.** 32-bit pointers reach `0x800000`
+  directly; code runs there normally. A project that filled the first chip (up to the end its
+  linker script reserves) moved on to 32 Mbit.
+* ⚠️ How the CPU reaches more than 2 MB *inside one chip* (8 and 16 MB images) is not
+  documented here; current tools assume 2 + 2 MB.
 
 ### 5.1 Confirmed BIOS Parameters
 

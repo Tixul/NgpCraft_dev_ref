@@ -31,7 +31,7 @@ _my_function:
 | `section code large` | `f_code` | Cartridge ROM (`0x200000+`) |
 | `section code near` | `f_code near` | RAM (rarely used) |
 | `section data near` | `f_data` | Initialized RAM (ROM -> RAM copy at boot) |
-| `section bss near` | `f_area` | Zero-initialized RAM (zeroed by bootstrap) |
+| `section bss near` | `f_area` | Zero-initialized RAM (zeroed by the NgpCraft template's `runtime_bootstrap()`, called from `ngpc_init()`; a template with no startup code zeroes nothing) |
 
 C variables compiled with cc900 -> `f_area` section.
 For variables shared between C and ASM: declare them in the `.c` file as non-static
@@ -285,6 +285,22 @@ Related decoder trap — **byte `mul`/`div` destinations**: the 3-bit RR field i
 At byte size only odd codes exist (001 WA, 011 BC, 101 DE, 111 HL); at word size 000..111 =
 XWA..XSP. So `CE 53` is `div BC,H`, not `div HL,H`.
 
+### 3.10 `SCF` / `CCF` / `RCF` / `ZCF` exist — and they keep Z
+
+The TLCS-900 has one-byte carry instructions: **`RCF` `0x10`** (C = 0), **`SCF` `0x11`**
+(C = 1, H = N = 0), **`CCF` `0x12`** (C inverted, N = 0), **`ZCF` `0x13`** (C = not Z). They
+leave **Z, S and V untouched**, exactly like the carry instructions of other 8-bit CPUs, and
+official games use them.
+
+Why it matters: code that assumed "there is no `scf`" emulated it with `ld a,0` / `sub a,1`.
+That sets the carry — and also **clears Z** (and destroys A). A sequence like
+`bit 0,(hl)` / `scf` / `ret z` then took the wrong branch, and in a translated game the
+enemies let go instead of grabbing.
+
+**Before emulating an instruction you believe is missing, check the opcode table and a
+disassembly of an official game; and an emulation must preserve every flag the original
+preserves, not only the one it is after.**
+
 ## 4. LDIRW Block Copy Pattern
 
 `LDIRW`: copies `BC` words (2 bytes each) from `XHL` to `XDE`.
@@ -316,9 +332,8 @@ forward. The source must lag the destination by **exactly 2 bytes**.
 ld      xde, 0
 ld      de, _buffer          ; destination = start of buffer
 ld      (xde), wa            ; seed the first word with the fill value (WA)
-ld      xhl, 0
-ld      hl, _buffer          ; source = dest - 2 (one word lag)
-sub     hl, 2
+ld      xhl, xde             ; source = the seeded word
+add     de, 2                ; destination = the next word (source lags by one word)
 ld      bc, N-1              ; remaining words
 ldirw                        ; each word copies the previous -> whole buffer = fill value
 ```
@@ -332,6 +347,23 @@ ldirw                        ; each word copies the previous -> whole buffer = f
 | Gain | ~4x (plus C loop overhead) |
 
 Practical impact: ~300 cycles freed on the critical VBlank path for a 256-byte OAM flush.
+
+### Which registers a block copy uses is in its ENCODING
+
+`ldi` / `ldir` / `ldiw` / `ldirw` exist in **two forms**, and the prefix byte says which:
+
+| written | bytes (asm900) | copies |
+|---|---|---|
+| `ldir` / `ldirw` (no operand) | `83 11` / `93 11` | **(XDE+) ← (XHL+)** |
+| `ldir (xix+),(xiy+)` / `ldirw (xix+),(xiy+)` | `85 11` / `95 11` | **(XIX+) ← (XIY+)** |
+
+The low bits of the prefix name the source register (3 = XHL, 5 = XIY); the destination is
+XDE, or XIX with the XIY form. `BC` is the count in both.
+
+⚠️ A claim that circulated — "the datasheet says XDE/XHL but the silicon uses XIX/XIY" — is a
+confusion between these two forms, not a silicon quirk. The examples above, and the template's
+`ngpc_memcpy_w`, use the plain form with XDE/XHL and run on hardware. When a copy goes to the wrong place,
+**disassemble it and read the prefix byte.**
 
 ---
 

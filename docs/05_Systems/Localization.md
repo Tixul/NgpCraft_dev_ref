@@ -40,7 +40,7 @@ This register is part of the BIOS System Information area (`0x6F80-0x6F91`):
 0x6F84  HW_USR_BOOT       boot type (0=power, 1=resume, 2=alarm)
 0x6F85  HW_USR_SHUTDOWN   BIOS shutdown request flag
 0x6F86  HW_USR_ANSWER     user response flags
-0x6F87  HW_LANGUAGE       language (0=EN, 1=JP)      <-- here
+0x6F87  HW_LANGUAGE       language (0=JP, 1=EN)      <-- here
 0x6F91  HW_OS_VERSION     0=NGP mono, !=0=NGPC color
 ```
 
@@ -74,7 +74,7 @@ void ngpc_init(void)
 {
     /* ... */
     /* Cache system language from BIOS register (0x6F87).
-     * LANG_ENGLISH=0, LANG_JAPANESE=1. Set by BIOS at boot, read-only. */
+     * LANG_JAPANESE=0, LANG_ENGLISH=1 (SysWork.txt). Set by BIOS at boot, read-only. */
     s_language = HW_LANGUAGE;
     /* ... */
 }
@@ -186,20 +186,20 @@ by `ngpc_get_language()` (0 or 1).
 ### 5.1 Basic Pattern
 
 ```c
-/* String tables — English [0], Japanese [1] */
+/* String tables — Japanese [0], English [1] (0x6F87: 0 = Japanese) */
 static const char * const s_msg_title[2] = {
-    "NGPC Game",       /* [0] LANG_ENGLISH  */
-    "NGPC Game"        /* [1] LANG_JAPANESE (same title here) */
+    "NGPC Game",       /* [0] LANG_JAPANESE (same title here) */
+    "NGPC Game"        /* [1] LANG_ENGLISH  */
 };
 
 static const char * const s_msg_start[2] = {
-    "Press A to start",  /* [0] LANG_ENGLISH  */
-    "A: START"           /* [1] LANG_JAPANESE */
+    "A: START",  /* [0] LANG_JAPANESE */
+    "Press A to start"           /* [1] LANG_ENGLISH  */
 };
 
 static const char * const s_msg_pause[2] = {
-    "PAUSED",            /* [0] LANG_ENGLISH  */
-    "PAUSE"              /* [1] LANG_JAPANESE */
+    "PAUSE",            /* [0] LANG_JAPANESE */
+    "PAUSED"              /* [1] LANG_ENGLISH  */
 };
 
 /* Usage: */
@@ -256,7 +256,7 @@ For larger games, avoid passing `lang` as a parameter everywhere:
 
 ```c
 /* game_state.h */
-extern u8 g_lang;   /* 0=EN, 1=JP — copy of ngpc_get_language() */
+extern u8 g_lang;   /* 0=JP, 1=EN — copy of ngpc_get_language() */
 
 /* main.c — after ngpc_init() */
 u8 g_lang;
@@ -284,8 +284,8 @@ Not just strings — some games ship different tiles or sprites per language
 /* Tile data pointers indexed by language */
 /* IMPORTANT: NGP_FAR required for cartridge ROM data at 0x200000+ */
 static const u16 NGP_FAR * const s_logo_tiles[2] = {
-    logo_en_tiles,    /* [0] LANG_ENGLISH  — defined in assets_en.c */
-    logo_jp_tiles     /* [1] LANG_JAPANESE — defined in assets_jp.c */
+    logo_jp_tiles,    /* [0] LANG_JAPANESE — defined in assets_jp.c */
+    logo_en_tiles     /* [1] LANG_ENGLISH  — defined in assets_en.c */
 };
 
 static const u16 s_logo_tile_count[2] = {
@@ -316,7 +316,7 @@ then saving the choice makes sense:
 ```c
 typedef struct {
     u8 magic[4];
-    u8 lang_override;   /* 0xFF = use BIOS, 0=EN, 1=JP */
+    u8 lang_override;   /* 0xFF = use BIOS, 0=JP, 1=EN */
     /* ... */
 } SaveData;
 
@@ -441,15 +441,15 @@ described in Pitfall 1.
 |------|-------------|-------|
 | Hardware address | `0x6F87` | Part of BIOS system area |
 | Register macro | `HW_LANGUAGE` | `ngpc_hw.h` |
-| English constant | `LANG_ENGLISH = 0u` | `ngpc_hw.h` |
-| Japanese constant | `LANG_JAPANESE = 1u` | `ngpc_hw.h` |
+| English constant | `LANG_ENGLISH = 1u` | `ngpc_hw.h` |
+| Japanese constant | `LANG_JAPANESE = 0u` | `ngpc_hw.h` |
 | Cached API | `ngpc_get_language()` | Returns cached value |
 | Cache init | `s_language = HW_LANGUAGE` in `ngpc_init()` | After runtime_bootstrap |
 | Sysfont, whole set | 256 characters in tile slots 0..255 | Tile index == character code; language-independent |
 | Sysfont, ASCII | `0x20-0x7F` at the same slot numbers | Tile index == ASCII code |
 | Sysfont, katakana | `0xA1-0xDF` at the same slot numbers | JIS X 0201, loaded by the same call |
 | Japanese bytes | Use `u8[]` + `(const char *)` cast | Signed char issue in cc900 |
-| String table | `const char * const msg[2] = { "EN", "JP" };` | Index by `ngpc_get_language()` |
+| String table | `const char * const msg[2] = { "JP", "EN" };` | Index by `ngpc_get_language()` |
 | Asset table | `const u16 NGP_FAR * const tiles[2]` | NGP_FAR required for ROM data |
 | Save language? | No — read from BIOS each boot | Unless in-game override needed |
 | Out-of-bounds guard | Clamp to 1: `(lang <= 1) ? lang : 0` | Optional, defensive |
@@ -458,7 +458,7 @@ Minimal bilingual ROM pattern:
 
 ```c
 /* After ngpc_init() + ngpc_load_sysfont(): */
-u8 lang = ngpc_get_language();   /* 0=EN, 1=JP */
+u8 lang = ngpc_get_language();   /* 0=JP, 1=EN */
 
 static const char * const s_msg[2] = { "Press A", "A BUTTON" };
 ngpc_text_print(GFX_SCR1, 0, col, row, s_msg[lang]);

@@ -417,6 +417,65 @@ one assembly call per object — a column-major strip of 2×N tiles, clipped, wr
 the back buffer — gave 593 for 600 (~59 fps), same picture. Validate once per object, batch per
 object, and put the inner loop in assembly.
 
+### 4.10 The frame budget: about 7 800 instructions from the cartridge
+
+Measured on translated code running in real game scenes: **from the cartridge an instruction
+costs 13.1 cycles on average** (2.68 bytes fetched over the 8-bit cartridge bus), **from internal
+RAM 8.9 cycles**. A frame is about 102 000 cycles, so the budget is **~7 800 instructions per
+frame when the code runs from the cartridge** — the NGPC is not faster than an 8-bit handheld
+of the same era, it is in the same class.
+
+What shipped games do, measured during play: **~8 000 instructions per frame** in a
+run-and-gun, **~10 400** in a fast platformer, **99 % of them fetched from the cartridge and
+no code executed from RAM**. Treat those numbers as the order of magnitude a full game lives
+in.
+
+Two consequences:
+
+* a port of a game written for a machine of similar speed only holds 60 Hz if the port
+  executes **fewer** instructions than the original — "translate one for one" is already too
+  slow;
+* on the cartridge, time follows the **bytes of code fetched**: the same 600-instruction
+  sequence took **8 160 cycles from the cartridge and 4 320 from internal RAM (1.89×)** on a
+  bench that ran it from both places.
+
+### 4.11 Running hot code from internal RAM — what pays, and the rules
+
+The fetch cost above makes internal RAM (`0x4000`–`0x6BFF`, zero wait states, 16-bit; the
+system keeps `0x6C00`–`0x6FFF`) the fastest place to run code. In practice the time is
+concentrated: **2 KiB of code made 52 % of the time** of a heavy scene. Measured gains:
+
+* a dispatcher moved to RAM: a few percent on every scene;
+* the per-tile search of a game port copied into RAM: its slowest rooms went from **~31 to
+  ~58 updates per second**;
+* making code fetch free (an emulator experiment, to size the opportunity): logical speed
+  **0.75 → 1.00** on a scene that was too slow.
+
+**Where to put it:** RAM is full in a real game. Overlay the code on a buffer that is **not
+live at the same time** (a dialogue buffer outside dialogues), copy it in when the buffer is
+free, clear a "copy valid" flag every time the buffer is reused, check a signature before
+calling, and fall back to the ROM copy otherwise. It costs no stack byte.
+
+**Rules for code that will run from a copy:**
+
+1. **Only position-independent code moves.** Internal jumps must be relative (`jr` / `jrl`);
+   check the listing (`asm900 -l`). A `switch` compiled as an **absolute jump table** cannot be
+   moved as is.
+2. ⛔ **cc900 compiles a direct call to a nearby function as `calr` — a RELATIVE call.** From
+   the RAM copy it lands somewhere else, and the program dies (seen: a game that no longer
+   started). Call other functions **through a pointer** (`call xwa`), or keep the copied
+   routine a leaf.
+3. With the open-source assembler, a `call` / `jp` to a label of the **same section** is also
+   relaxed to a relative form — see the Build Toolchain page, §9.0c. Put code that will be
+   copied in its own section.
+4. **Copy only self-contained computation that carries the cost itself.** A small loop that
+   calls functions left in ROM gains nothing (measured, and reverted).
+
+⚠️ In the same port, three "obvious" C micro-optimisations were measured **slower**: mask
+tables declared far (`NGP_FAR`, far reads), 32-bit shifts, and a local bitmap cleared every
+frame. And the frame rate moved in steps (60 / 30): a tiny change can tip a scene over. Measure
+each change on the scene that is at the limit.
+
 ## 5. Regression: prove behaviour did not change
 
 Speed work is only safe with an independent behaviour check. A scripted self-player that
@@ -505,6 +564,45 @@ Field report: in one project the margin silently fell to ~170 bytes; the first s
 crash but an initialised variable overwritten deep in a scene (a wrong room loaded during an intro).
 Combine with §5.2 (witness bytes) to know the real depth.
 
+### 5.5 Find the stack's lowest point exactly — log the writes, do not sample
+
+**Sampling the stack pointer misses the peaks.** Reading `XSP` every 64 instructions reported
+"lowest point 0x6B8E, no overflow" on a port whose stack actually went down to **0x6B56** and
+overwrote variables. A witness fill (§5.2) tells you *that* it happened, not *who* did it.
+
+The exact method, on an emulator that can log writes over an address range (the NgpCraft core's
+write log, or a range watchpoint):
+
+1. Log writes over the band between the end of the data (last RAM section in the `.map`) and
+   the stack top. **Arm it after the startup code**, which clears that band.
+2. Read the log every frame: the **lowest address written** and the **PC** that wrote it. A
+   write from a stack-ish PC (BIOS `0xFF....`, an interrupt prologue) is the stack; a write
+   from a game PC is a real variable living there.
+3. For the call chain at the peak, replay to that frame and step one instruction at a time,
+   keeping the lowest `XSP` and a copy of the stack: the 32-bit words that fall in the code
+   range are return addresses.
+4. `static` functions are not in the `.map`. Compile the file with `cc900 -S` and the same
+   flags as the makefile, assemble with `asm900 -l`, and map PC − start of the module's
+   `f_code` (from the `.map`) to the labels of the listing.
+
+⚠️ **The BIOS pushes 12 bytes onto the INTERRUPTED stack before it switches to the interrupt
+stack.** A private stack with a few bytes of margin only breaks when an interrupt lands at its
+deepest point — a latent fault that one day's timing triggers (a return address overwritten,
+then a jump into data). Count those 12 bytes, and nested interrupts (110 bytes measured at worst
+in one project), in the margin.
+
+**Every static you add moves the data end up toward the stack.** After each addition, check
+the address of the last variable in the `.map`. Remedies that worked, in order of preference:
+
+* overlay two buffers that are **never live at the same time**;
+* move a deep operation (a flash write with its checksum, called from deep inside a script
+  interpreter) out of the deep call chain: set a flag, and do it at the end of the loop where
+  the stack is shallow;
+* drop library objects nobody calls from the makefile (one port got 333 bytes back that way).
+
+⛔ Do not "save RAM" by replacing one RAM copy with N copies straight from ROM inside VBlank: it
+lengthens VBlank and shifts every timing-sensitive bench. Keep the same shape of copy.
+
 ## 6. Hardware traps the emulator cannot show
 
 These produce a working emulator build and a broken cartridge.
@@ -557,6 +655,37 @@ to **32**.
 
 Note this was only visible **with wait-states enabled** — without them the same test
 showed 27 vs 24, which reads as noise.
+
+### 6.4 Never put a stack or hot variables in video RAM
+
+During active display the video chip throttles every CPU write to `0x8000`–`0xBFFF`
+(tiles, maps, sprites, palettes — the video registers excepted): **about 3 extra cycles per access**, measured
+on a console; nothing during VBlank, and block copies already include it. That looks small
+until something writes there all the time.
+
+Field report: a private stack placed in free character RAM (`0xB900`–`0xBBFF`, "unused
+tiles") made the games running on it **12 to 20 % slower** — while the same stack in internal
+RAM was *faster* than before. Free character RAM is free to *read*, not to write. Keep it for
+data that is mostly read, or written during VBlank; stacks, buffers and variables written
+often belong in internal RAM (`0x4000`–`0x6BFF`).
+
+### 6.5 Z80 RAM: random at power-on, and every access holds the Z80
+
+* **`0x7000`–`0x7FFF` is random at power-on on a console**; emulators give zeros. Every byte
+  the two CPUs share must be written by the main CPU **before** the Z80 is released, and a test
+  harness should fill that range with noise itself.
+* **Each main-CPU access to Z80 RAM is a bus request that suspends the Z80** — and with it
+  the music. Its exact price on silicon is still being calibrated; emulators may not charge it
+  at all. Consequences:
+  * no stack or busy buffer there: one port that kept a buffer at `0x7A00` made **784 accesses
+    per frame in combat, 4 018 in the worst frame**;
+  * poll a Z80 flag rarely (spin in main RAM between two reads), copy little per frame;
+  * cc900's only block copy is `ldirw` (words); word writes into Z80 RAM were never validated
+    on a console, so copy bytes through pointers.
+* **Comparing a C sound driver with its Z80 version:** effects usually advance per game tick
+  and music per VBlank. A single frame lost on one side (loading, start-up) shifts one against
+  the other without any driver fault. Compare only with aligned VBlank clocks, from an empty
+  scene, and check that the C writes are an exact prefix of the Z80 writes.
 
 ---
 

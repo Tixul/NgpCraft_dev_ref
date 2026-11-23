@@ -736,6 +736,15 @@ missing terminator gets suspected. Count `b.count(0)` in every source file after
 edit, and write patch scripts to a file rather than through a heredoc. And encode BEFORE
 opening for write: `open(p, "w")` truncates first, so an encoding error leaves an empty file.
 
+### 8.5f cc900 can stop with no message — check its exit code
+
+Moving a waiting loop *into* one large function made cc900 stop half-way: the assembly output
+was **truncated**, the exit code was **2**, and **no message** was printed. Depending on the
+makefile, the build may carry on with a stale or partial object.
+
+* Check cc900's exit code in the build (and that the generated `.asm` ends normally).
+* The fix that worked: move the new code into **a separate function**.
+
 ### 8.6 Full Pitfall Table
 
 | Symptom | Probable cause | Fix |
@@ -866,6 +875,33 @@ not write.
 **5. Measure per STAGE, not per function.** A stage that has never been measured contains
 wrong code, and "it compiles" proves nothing about any of them. See also §8.2c: a link
 error can print and still return success.
+
+### 9.0c Assembler traps for code that will be COPIED to RAM — and a second opinion
+
+Found by re-reading the bytes the open-source assembler (`t900as.py`) emitted, in a project
+that copies routines into internal RAM:
+
+1. **A `call` / `jp` to a label of the SAME section is relaxed into `calr` / `jrl`
+   (relative).** That is correct where the code is linked — and wrong in a copy: from RAM it
+   lands `0x200000` too low. Put every routine that will be copied in **its own section**: its
+   calls to other sections stay absolute, its internal relative jumps stay right in the copy.
+2. **`label - label` expressions are not evaluated**: `ld bc,end-start` came out as
+   `ld bc,end`, and `jp BASE+(a-b)` as a relative jump into ROM. Use fixed addresses and sizes,
+   and check them in the build script.
+
+The same "relative call" trap exists in cc900 output — see the Measuring Performance page,
+§4.11.
+
+**A second, independent assembler to check encodings:** Alfred Arnold's AS (`asl`), with
+`cpu 96C141` and `maxmode on` (the 900/H is not named; it is the 900 in maximum mode), then
+`p2bin`. On 787 test forms it produced the same bytes as asm900 on 783; the other four are
+legal alternative encodings. Two cautions:
+
+* AS is **more permissive** than asm900 on long memory forms (it assembles `incl 1,(xwa)`,
+  which asm900 rejects): it can confirm bytes, not legality;
+* ⛔ an unknown register name is **silently taken as a label**: `wa1` (which does not exist)
+  became a memory access `ld hl,(0x0036)` with no error. The bank-1 register names are `xwa1`
+  (long), `rwa1` (low word), `qwa1` (high word). Always re-read the bytes.
 
 ### 9.1 Pipeline
 
